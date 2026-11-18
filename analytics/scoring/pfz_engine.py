@@ -54,6 +54,7 @@ def score_pfz_record(
     record: PfzScoringInput,
     config: ScoringConfig = DEFAULT_SCORING_CONFIG,
     analytics_version: str = "deterministic-v1",
+    source_override: str | None = None,
 ) -> PfzScoredResult:
     pfz = calculate_pfz(record, config)
     confidence = calculate_pfz_confidence(record, config)
@@ -68,5 +69,5 @@ def score_pfz_record(
         confidence_score=confidence.score,
         analytics_version=analytics_version,
         environmental_observation_id=record.environmental_observation_id,
-        source="gee",
+        source=source_override or "gee",
     )
