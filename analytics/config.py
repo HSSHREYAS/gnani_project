@@ -303,8 +303,14 @@ DEFAULT_PIPELINE_CONFIG = PipelineConfig(
 
 
 def load_database_config_from_env() -> DatabaseConfig:
+    raw_url = (
+        os.getenv("MATSYAMITRA_DATABASE_URL")
+        or os.getenv("MATSYAMITRA_DATABASE_URI")
+        or os.getenv("DATABASE_URL")
+        or ""
+    )
     return DatabaseConfig(
-        database_url=os.getenv("MATSYAMITRA_DATABASE_URL", ""),
+        database_url=raw_url,
         echo_sql=os.getenv("MATSYAMITRA_DATABASE_ECHO", "false").lower() == "true",
         pool_pre_ping=os.getenv("MATSYAMITRA_DATABASE_POOL_PRE_PING", "true").lower() == "true",
         schema_version=os.getenv("MATSYAMITRA_DATABASE_SCHEMA_VERSION", "1"),

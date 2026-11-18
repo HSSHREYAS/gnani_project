@@ -8,7 +8,8 @@ import { Platform } from 'react-native';
 // phone reach it as localhost:8000 through `adb reverse tcp:8000 tcp:8000`
 // (quick-start.ps1 and phone-setup.ps1 set this up). `Platform` is kept for future
 // per-platform hosts.
-const DEFAULT_DEV_HOST = Platform.OS === 'android' ? 'http://localhost:8000' : 'http://localhost:8000';
+const CLOUD_PROD_HOST = 'https://gnani-project.onrender.com';
+const DEFAULT_DEV_HOST = __DEV__ ? 'http://localhost:8000' : CLOUD_PROD_HOST;
 
 export const API_CONFIG = {
   BASE_URL: DEFAULT_DEV_HOST,

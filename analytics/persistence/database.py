@@ -8,10 +8,16 @@ from analytics.persistence.models import Base
 
 def create_database_engine(config: DatabaseConfig | None = None) -> Engine:
     database_config = config or load_database_config_from_env()
+    db_url = database_config.database_url
+
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    if db_url.startswith("postgresql://") and not db_url.startswith("postgresql+"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
     try:
         return create_engine(
-            database_config.database_url,
+            db_url,
             echo=database_config.echo_sql,
             pool_pre_ping=database_config.pool_pre_ping,
             future=True,
