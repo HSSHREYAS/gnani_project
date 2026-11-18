@@ -1,141 +1,161 @@
+"""Live Open-Meteo Marine Data Pipeline & Risk Scoring for MatsyaMitra.
+
+Fetches live wave height and wind speed from Open-Meteo's public API for all 25
+canonical Karnataka coastal stations, persists them into marine_observations,
+and calculates operational risk scores with the piecewise marine risk engine.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
 import os
-import subprocess
-import sys
+import urllib.request
 from datetime import datetime, timezone
+from typing import List, Optional
 
-from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from analytics.persistence.database import create_database_engine
 from analytics.config import load_database_config_from_env
+from analytics.persistence.database import create_database_engine
 from analytics.persistence.models import MarineObservation, RiskResult, SamplingLocation
-from analytics.persistence.marine_repository import MarineObservationRepository
 from analytics.persistence.repository import RiskRepository
+from analytics.scoring.models import RiskScoringInput
 from analytics.scoring.risk_engine import score_risk_record
-from analytics.scoring.models import RiskScoringInput
-from analytics.scoring.models import RiskScoringInput
 
-def run_typescript_ingestion():
-    # Use npx tsx to run the TypeScript ingestion script
-    script_path = os.path.join("backend", "marine", "liveMarineIngestion.ts")
-    print("Running TypeScript Open-Meteo extraction...")
-    
-    db_config = load_database_config_from_env()
-    env = os.environ.copy()
-    env["MATSYAMITRA_DATABASE_URL"] = db_config.database_url
-    
-    result = subprocess.run(["npx", "tsx", script_path], capture_output=True, text=True, cwd=os.getcwd(), shell=True, env=env)
-    if result.returncode != 0:
-        print("TypeScript extraction failed:")
-        print(result.stdout)
-        print(result.stderr)
-        raise RuntimeError(f"TypeScript extraction failed with code {result.returncode}")
-    
-    print(result.stdout)
+logger = logging.getLogger("matsyamitra_open_meteo_pipeline")
+
+
+def fetch_open_meteo_telemetry(locations: List[SamplingLocation]) -> tuple[list, list]:
+    """Batch fetch live marine wave height and wind speed from Open-Meteo."""
+    if not locations:
+        return [], []
+
+    lats = ",".join(str(loc.latitude) for loc in locations)
+    lons = ",".join(str(loc.longitude) for loc in locations)
+
+    # 1. Marine Wave Height API
+    url_marine = (
+        f"https://marine-api.open-meteo.com/v1/marine"
+        f"?latitude={lats}&longitude={lons}&hourly=wave_height&cell_selection=sea&forecast_days=1"
+    )
+    req_marine = urllib.request.Request(url_marine, headers={"User-Agent": "MatsyaMitra/1.0"})
+    with urllib.request.urlopen(req_marine, timeout=15) as resp:
+        marine_raw = json.loads(resp.read().decode("utf-8"))
+        marine_list = marine_raw if isinstance(marine_raw, list) else [marine_raw]
+
+    # 2. Weather Wind Speed API
+    url_wind = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lats}&longitude={lons}&hourly=wind_speed_10m&wind_speed_unit=ms&forecast_days=1"
+    )
+    req_wind = urllib.request.Request(url_wind, headers={"User-Agent": "MatsyaMitra/1.0"})
+    with urllib.request.urlopen(req_wind, timeout=15) as resp:
+        wind_raw = json.loads(resp.read().decode("utf-8"))
+        wind_list = wind_raw if isinstance(wind_raw, list) else [wind_raw]
+
+    return marine_list, wind_list
+
+
+def ingest_and_score_live_data(session: Session) -> int:
+    """Fetch live Open-Meteo observations for all active stations, persist, and score risk."""
+    locations = list(
+        session.scalars(
+            select(SamplingLocation)
+            .where(SamplingLocation.is_active.is_(True))
+            .order_by(SamplingLocation.id)
+        ).all()
+    )
+
+    if not locations:
+        logger.warning("No active sampling locations found in database.")
+        return 0
+
+    logger.info("Fetching Open-Meteo telemetry for %d canonical Karnataka locations...", len(locations))
+    marine_data, wind_data = fetch_open_meteo_telemetry(locations)
+
+    now_utc = datetime.now(timezone.utc)
+    target_hour = now_utc.strftime("%Y-%m-%dT%H:00")
+    risk_repo = RiskRepository(session)
+
+    inserted_count = 0
+
+    for i, loc in enumerate(locations):
+        m_item = marine_data[i] if i < len(marine_data) else {}
+        w_item = wind_data[i] if i < len(wind_data) else {}
+
+        times_m = m_item.get("hourly", {}).get("time", [])
+        waves = m_item.get("hourly", {}).get("wave_height", [])
+        times_w = w_item.get("hourly", {}).get("time", [])
+        winds = w_item.get("hourly", {}).get("wind_speed_10m", [])
+
+        idx_m = times_m.index(target_hour) if target_hour in times_m else (len(times_m) - 1 if times_m else 0)
+        idx_w = times_w.index(target_hour) if target_hour in times_w else (len(times_w) - 1 if times_w else 0)
+
+        wave_val = waves[idx_m] if idx_m < len(waves) else None
+        wind_val = winds[idx_w] if idx_w < len(winds) else None
+
+        time_str = times_m[idx_m] if idx_m < len(times_m) else target_hour
+        try:
+            obs_dt = datetime.fromisoformat(time_str).replace(tzinfo=timezone.utc)
+        except Exception:
+            obs_dt = now_utc
+
+        # Check existing MarineObservation to avoid duplicate constraint errors
+        existing_obs = session.scalar(
+            select(MarineObservation).where(
+                MarineObservation.location_id == loc.location_id,
+                MarineObservation.observation_timestamp == obs_dt,
+                MarineObservation.source == "open-meteo",
+            )
+        )
+
+        if not existing_obs:
+            obs = MarineObservation(
+                sampling_location_id=loc.id,
+                location_id=loc.location_id,
+                latitude=loc.latitude,
+                longitude=loc.longitude,
+                observation_timestamp=obs_dt,
+                wind_speed=wind_val,
+                wave_height=wave_val,
+                source="open-meteo",
+                source_latitude=m_item.get("latitude"),
+                source_longitude=m_item.get("longitude"),
+            )
+            session.add(obs)
+            session.flush()
+            obs_id = obs.marine_observation_id
+        else:
+            obs_id = existing_obs.marine_observation_id
+
+        # Calculate risk score with deterministic risk engine
+        age_hours = max(0.0, (now_utc - obs_dt).total_seconds() / 3600.0)
+        scoring_input = RiskScoringInput(
+            wind_speed=wind_val if wind_val is not None else 0.0,
+            wave_height=wave_val if wave_val is not None else 0.0,
+            observation_timestamp=obs_dt,
+            sampling_location_id=loc.id,
+            marine_observation_id=obs_id,
+            data_age_hours=age_hours,
+            source="open-meteo",
+        )
+        scored_result = score_risk_record(scoring_input)
+        inserted = risk_repo.insert_risk_result(scored_result)
+        inserted_count += inserted
+
+    session.commit()
+    logger.info("Successfully ingested & scored %d risk results for Karnataka stations.", inserted_count)
+    return inserted_count
+
 
 def main():
-    run_typescript_ingestion()
-
     engine = create_database_engine()
     with Session(engine) as session:
-        marine_repo = MarineObservationRepository(session)
-        risk_repo = RiskRepository(session)
-        
-        # 1. Backfill sampling location IDs
-        backfilled_count = marine_repo.backfill_sampling_location_ids()
-        print(f"Backfilled sampling_location_id for {backfilled_count} marine observations.")
-        
-        # 2. Get the latest observations per canonical location
-        observations = marine_repo.get_latest_unscored_observations("open-meteo")
-        print(f"Found {len(observations)} latest marine observations for scoring.")
-        
-        # 3. Score and persist
-        now = datetime.now(tz=timezone.utc)
-        
-        inserted_results = 0
-        
-        for obs in observations:
-            # Calculate actual data_age_hours
-            if obs.observation_timestamp.tzinfo is None:
-                # If naive for some reason, assume UTC
-                obs_time = obs.observation_timestamp.replace(tzinfo=timezone.utc)
-            else:
-                obs_time = obs.observation_timestamp
-                
-            age_hours = (now - obs_time).total_seconds() / 3600.0
-            
-            scoring_input = RiskScoringInput(
-                wind_speed=obs.wind_speed,
-                wave_height=obs.wave_height,
-                observation_timestamp=obs_time,
-                sampling_location_id=obs.sampling_location_id,
-                marine_observation_id=obs.marine_observation_id,
-                data_age_hours=max(0.0, age_hours),
-                source="open-meteo"
-            )
-            
-            scored_result = score_risk_record(scoring_input)
-            
-            inserted = risk_repo.insert_risk_result(scored_result)
-            inserted_results += inserted
-            
-        session.commit()
-        
-        print(f"Successfully generated and inserted {inserted_results} NEW hourly risk results.")
-        
-        # Live PostgreSQL Verification Report
-        all_marine = session.scalars(select(MarineObservation).where(MarineObservation.source == "open-meteo")).all()
-        all_risk = session.scalars(select(RiskResult).where(RiskResult.source == "open-meteo")).all()
-        
-        print("\n--- LIVE POSTGRESQL VERIFICATION REPORT ---")
-        
-        # marine_observations stats
-        print("\nmarine_observations:")
-        print(f"- total rows: {len(all_marine)}")
-        print(f"- distinct locations: {len(set(m.location_id for m in all_marine))}")
-        print(f"- valid wind count: {sum(1 for m in all_marine if m.wind_speed is not None)}")
-        print(f"- valid wave count: {sum(1 for m in all_marine if m.wave_height is not None)}")
-        timestamps = [m.observation_timestamp for m in all_marine]
-        print(f"- earliest timestamp: {min(timestamps) if timestamps else 'N/A'}")
-        print(f"- latest timestamp: {max(timestamps) if timestamps else 'N/A'}")
-        print(f"- source values: {list(set(m.source for m in all_marine))}")
-        
-        # risk_results stats
-        print("\nrisk_results:")
-        print(f"- total rows generated by this test: {inserted_results}")
-        print(f"- distinct locations: {len(set(r.sampling_location_id for r in all_risk))}")
-        r_timestamps = [r.observation_timestamp for r in all_risk]
-        print(f"- earliest timestamp: {min(r_timestamps) if r_timestamps else 'N/A'}")
-        print(f"- latest timestamp: {max(r_timestamps) if r_timestamps else 'N/A'}")
-        print(f"- valid risk score count: {sum(1 for r in all_risk if r.risk_score is not None)}")
-        scores = [r.risk_score for r in all_risk if r.risk_score is not None]
-        print(f"- risk score min/max: {min(scores):.2f}/{max(scores):.2f}" if scores else "- risk score min/max: N/A")
-        confidences = [r.confidence_score for r in all_risk]
-        print(f"- confidence min/max: {min(confidences):.2f}/{max(confidences):.2f}" if confidences else "- confidence min/max: N/A")
-        print(f"- risk categories: {list(set(r.risk_category for r in all_risk))}")
-        
-        # Sample records
-        print("\nSample records:")
-        samples = []
-        # Let's get the 5 latest risk results
-        for r in sorted(all_risk, key=lambda x: x.id, reverse=True)[:5]:
-            # find corresponding marine obs
-            m_obs = session.get(MarineObservation, r.marine_observation_id)
-            samples.append({
-                "location_id": m_obs.location_id if m_obs else "UNKNOWN",
-                "canonical_latitude": m_obs.latitude if m_obs else 0,
-                "canonical_longitude": m_obs.longitude if m_obs else 0,
-                "observation_timestamp": r.observation_timestamp.isoformat(),
-                "wind_speed": r.wind_speed,
-                "wave_height": r.wave_height,
-                "risk_score": r.risk_score,
-                "risk_category": r.risk_category,
-                "confidence_score": r.confidence_score,
-                "source": r.source
-            })
-            
-        import json
-        print(json.dumps(samples, indent=2))
+        count = ingest_and_score_live_data(session)
+        print(f"Open-Meteo Pipeline finished. Scored {count} locations.")
+
 
 if __name__ == "__main__":
     main()
