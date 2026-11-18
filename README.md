@@ -66,6 +66,6 @@ npm run android
 
 ---
 
-*Built for the Gnani.ai Hackathon 2026 · Team MatsyaMitra*
+Team MatsyaMitra*
 
-**Team:** H S Shreyas · Chaithanya Nayaka T
+**Team:** H S Shreyas · Chaithanya Nayaka T . Anirudh Vishnu . Adithya S
