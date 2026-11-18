@@ -88,3 +88,7 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+*credentials*.json
+*service-account*.json
+gee-*.json
+*.apk

@@ -1,3 +1,6 @@
+import json
+import logging
+import os
 import sys
 from datetime import date, datetime, timezone
 from time import perf_counter
@@ -21,10 +24,36 @@ from analytics.scoring.models import PfzScoringInput
 from analytics.scoring.pfz_engine import score_pfz_record
 
 _UTC = timezone.utc
+logger = logging.getLogger("matsyamitra_gee_pipeline")
+
+
+def initialize_earth_engine(project_id: str | None = None) -> None:
+    """Initialize Earth Engine using service account JSON if available, or default credentials."""
+    project = project_id or os.getenv("MATSYAMITRA_GEE_PROJECT") or EARTH_ENGINE_PROJECT_ID
+    cred_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GEE_KEY_PATH")
+
+    if cred_file and os.path.exists(cred_file):
+        try:
+            with open(cred_file, "r", encoding="utf-8") as f:
+                cred_data = json.load(f)
+            client_email = cred_data.get("client_email")
+            if client_email:
+                credentials = ee.ServiceAccountCredentials(client_email, cred_file)
+                ee.Initialize(credentials, project=project)
+                logger.info("Initialized Earth Engine with service account: %s (project: %s)", client_email, project)
+                print(f"Initialized Earth Engine with service account: {client_email}")
+                return
+        except Exception as exc:
+            logger.warning("Failed to initialize with ServiceAccountCredentials: %s", exc)
+
+    # Standard default initialization
+    ee.Initialize(project=project)
+    print(f"Initialized Earth Engine with project: {project}")
+
 
 def run_live_gee_pfz_pipeline(engine: Any = None) -> dict[str, Any]:
     started_at = perf_counter()
-    ee.Initialize(project=EARTH_ENGINE_PROJECT_ID)
+    initialize_earth_engine()
 
     # 1. Run extraction (which now strictly uses Canonical Sampler and fetches latest images + timestamps)
     print("Running extraction...")
