@@ -3,7 +3,7 @@
 > **Document Type:** Comprehensive Technical Architecture, Decision History & Scientific Reference  
 > **Target Audience:** Major Project Final Report Reviewers, International Conference Referees (IEEE/ACM), Systems Engineers  
 > **Intellectual Property:** Proprietary © 2026 H S Shreyas. All Rights Reserved.  
-> **Authors:** H S Shreyas (Lead Architect & Developer), Chaithanya Nayaka T (Co-Investigator)  
+> **Authors:** H S Shreyas , Chaithanya Nayaka T , Anirudh Vishnu . Adithya S
 > **Location:** Coastal Karnataka littoral sector (Karwar to Mangalore), India
 
 ---
