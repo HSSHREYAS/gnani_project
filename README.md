@@ -2,6 +2,10 @@
 
 > *"ಮತ್ಸ್ಯಮಿತ್ರ" — Friend of the Fish, Guardian of the Fisherman*
 
+![License](https://img.shields.io/badge/license-Proprietary%20%C2%A9%20H%20S%20Shreyas-red)
+![Platform](https://img.shields.io/badge/platform-Android-green)
+![Language](https://img.shields.io/badge/language-Kannada%20first-orange)
+
 ---
 
 ## The Problem
@@ -64,5 +68,5 @@ npm run android
 
 *Built for the Gnani.ai Hackathon 2026 · Team MatsyaMitra*
 
-**Team:** H S Shreyas · Chaithanya Nayaka T</Replacement>
+**Team:** H S Shreyas · Chaithanya Nayaka T . Anirudh Vishnu . Adithya S</Replacement>
 </invoke>
