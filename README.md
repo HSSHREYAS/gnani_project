@@ -10,7 +10,7 @@
 
 ## The Problem
 
-Over **4 million coastal fishermen** in Karnataka  go to sea daily with little reliable, real-time information about sea conditions, weather hazards, or optimal fishing grounds. Language barriers, low literacy, and no internet-first tools leave them dependent on word-of-mouth — costing lives and livelihoods.
+Over **4 million coastal fishermen** in Karnataka and Kerala go to sea daily with little reliable, real-time information about sea conditions, weather hazards, or optimal fishing grounds. Language barriers, low literacy, and no internet-first tools leave them dependent on word-of-mouth — costing lives and livelihoods.
 
 ---
 
@@ -68,5 +68,4 @@ npm run android
 
 *Built for the Gnani.ai Hackathon 2026 · Team MatsyaMitra*
 
-**Team:** H S Shreyas · Chaithanya Nayaka T . Anirudh Vishnu . Adithya S</Replacement>
-</invoke>
+**Team:** H S Shreyas · Chaithanya Nayaka T
